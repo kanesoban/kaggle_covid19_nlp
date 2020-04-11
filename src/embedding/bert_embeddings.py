@@ -18,64 +18,20 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import argparse
 import codecs
 import collections
 import json
 import re
 
+from tqdm import tqdm
 from bert import modeling
 from bert import tokenization
+import numpy as np
 import tensorflow as tf
 
-flags = tf.flags
 
-FLAGS = flags.FLAGS
-
-flags.DEFINE_string("input_file", None, "")
-
-flags.DEFINE_string("output_file", None, "")
-
-flags.DEFINE_string("layers", "-1,-2,-3,-4", "")
-
-flags.DEFINE_string(
-    "bert_config_file", None,
-    "The config json file corresponding to the pre-trained BERT model. "
-    "This specifies the model architecture.")
-
-flags.DEFINE_integer(
-    "max_seq_length", 128,
-    "The maximum total input sequence length after WordPiece tokenization. "
-    "Sequences longer than this will be truncated, and sequences shorter "
-    "than this will be padded.")
-
-flags.DEFINE_string(
-    "init_checkpoint", None,
-    "Initial checkpoint (usually from a pre-trained BERT model).")
-
-flags.DEFINE_string("vocab_file", None,
-                    "The vocabulary file that the BERT model was trained on.")
-
-flags.DEFINE_bool(
-    "do_lower_case", True,
-    "Whether to lower case the input text. Should be True for uncased "
-    "models and False for cased models.")
-
-flags.DEFINE_integer("batch_size", 32, "Batch size for predictions.")
-
-flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
-
-flags.DEFINE_string("master", None,
-                    "If using a TPU, the address of the master.")
-
-flags.DEFINE_integer(
-    "num_tpu_cores", 8,
-    "Only used if `use_tpu` is True. Total number of TPU cores to use.")
-
-flags.DEFINE_bool(
-    "use_one_hot_embeddings", False,
-    "If True, tf.one_hot will be used for embedding lookups, otherwise "
-    "tf.nn.embedding_lookup will be used. On TPUs, this should be True "
-    "since it is much faster.")
+NUM_TPU_CORES = 8
 
 
 class InputExample(object):
@@ -207,26 +163,19 @@ def model_fn_builder(bert_config, init_checkpoint, layer_indexes, use_tpu,
     return model_fn
 
 
-def convert_examples_to_features(examples, seq_length, tokenizer):
+def convert_examples_to_features(full_texts, ids, seq_length, tokenizer):
     """Loads a data file into a list of `InputBatch`s."""
 
     features = []
-    for (ex_index, example) in enumerate(examples):
-        tokens_a = tokenizer.tokenize(example.text_a)
+    for (ex_index, example) in tqdm(enumerate(full_texts), desc='Converting examples'):
+        unique_id = ids[ex_index]
+        tokens_a = tokenizer.tokenize(example)
 
         tokens_b = None
-        if example.text_b:
-            tokens_b = tokenizer.tokenize(example.text_b)
 
-        if tokens_b:
-            # Modifies `tokens_a` and `tokens_b` in place so that the total
-            # length is less than the specified length.
-            # Account for [CLS], [SEP], [SEP] with "- 3"
-            _truncate_seq_pair(tokens_a, tokens_b, seq_length - 3)
-        else:
-            # Account for [CLS] and [SEP] with "- 2"
-            if len(tokens_a) > seq_length - 2:
-                tokens_a = tokens_a[0:(seq_length - 2)]
+        # Account for [CLS] and [SEP] with "- 2"
+        if len(tokens_a) > seq_length - 2:
+            tokens_a = tokens_a[0:(seq_length - 2)]
 
         # The convention in BERT is:
         # (a) For sequence pairs:
@@ -256,13 +205,6 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
         tokens.append("[SEP]")
         input_type_ids.append(0)
 
-        if tokens_b:
-            for token in tokens_b:
-                tokens.append(token)
-                input_type_ids.append(1)
-            tokens.append("[SEP]")
-            input_type_ids.append(1)
-
         input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
         # The mask has 1 for real tokens and 0 for padding tokens. Only real
@@ -281,7 +223,7 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
 
         if ex_index < 5:
             tf.logging.info("*** Example ***")
-            tf.logging.info("unique_id: %s" % (example.unique_id))
+            tf.logging.info("unique_id: %s" % unique_id)
             tf.logging.info("tokens: %s" % " ".join(
                 [tokenization.printable_text(x) for x in tokens]))
             tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
@@ -291,11 +233,21 @@ def convert_examples_to_features(examples, seq_length, tokenizer):
 
         features.append(
             InputFeatures(
+                unique_id=unique_id,
+                tokens=tokens,
+                input_ids=input_ids,
+                input_mask=input_mask,
+                input_type_ids=input_type_ids))
+
+        '''
+        features.append(
+            InputFeatures(
                 unique_id=example.unique_id,
                 tokens=tokens,
                 input_ids=input_ids,
                 input_mask=input_mask,
                 input_type_ids=input_type_ids))
+        '''
     return features
 
 
@@ -340,27 +292,23 @@ def read_examples(input_file):
     return examples
 
 
-def main(_):
-    tf.logging.set_verbosity(tf.logging.INFO)
+def bert_embedding_generator(articles, ids, bert_config_file, vocab_file, init_checkpoint, max_seq_length=128, batch_size=32):
+    layer_indexes = [-1]
 
-    layer_indexes = [int(x) for x in FLAGS.layers.split(",")]
-
-    bert_config = modeling.BertConfig.from_json_file(FLAGS.bert_config_file)
+    bert_config = modeling.BertConfig.from_json_file(bert_config_file)
 
     tokenizer = tokenization.FullTokenizer(
-        vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
+        vocab_file=vocab_file, do_lower_case=True)
 
     is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
     run_config = tf.contrib.tpu.RunConfig(
-        master=FLAGS.master,
+        master=None,
         tpu_config=tf.contrib.tpu.TPUConfig(
-            num_shards=FLAGS.num_tpu_cores,
+            num_shards=NUM_TPU_CORES,
             per_host_input_for_training=is_per_host))
 
-    examples = read_examples(FLAGS.input_file)
-
     features = convert_examples_to_features(
-        examples=examples, seq_length=FLAGS.max_seq_length, tokenizer=tokenizer)
+        full_texts=articles, ids=ids, seq_length=max_seq_length, tokenizer=tokenizer)
 
     unique_id_to_feature = {}
     for feature in features:
@@ -368,52 +316,56 @@ def main(_):
 
     model_fn = model_fn_builder(
         bert_config=bert_config,
-        init_checkpoint=FLAGS.init_checkpoint,
+        init_checkpoint=init_checkpoint,
         layer_indexes=layer_indexes,
-        use_tpu=FLAGS.use_tpu,
-        use_one_hot_embeddings=FLAGS.use_one_hot_embeddings)
+        use_tpu=False,
+        use_one_hot_embeddings=False)
 
     # If TPU is not available, this will fall back to normal Estimator on CPU
     # or GPU.
     estimator = tf.contrib.tpu.TPUEstimator(
-        use_tpu=FLAGS.use_tpu,
+        use_tpu=False,
         model_fn=model_fn,
         config=run_config,
-        predict_batch_size=FLAGS.batch_size)
+        predict_batch_size=batch_size)
 
-    input_fn = input_fn_builder(
-        features=features, seq_length=FLAGS.max_seq_length)
+    input_fn = input_fn_builder(features=features, seq_length=max_seq_length)
+    for result in tqdm(estimator.predict(input_fn, yield_single_examples=True), desc='Creating embeddings'):
+        unique_id = int(result["unique_id"])
+        feature = unique_id_to_feature[unique_id]
+        article_tokens = {}
+        for (i, token) in enumerate(feature.tokens):
+            # This is actually the output of the last encoder layer
+            layer_output = result["layer_output_0"]
+            embedding = np.array([round(float(x), 6) for x in layer_output[i:(i + 1)].flat])
+            if token in article_tokens:
+                article_tokens[token].append(embedding)
+            else:
+                article_tokens[token] = [embedding]
 
-    with codecs.getwriter("utf-8")(tf.gfile.Open(FLAGS.output_file,
-                                                 "w")) as writer:
-        for result in estimator.predict(input_fn, yield_single_examples=True):
-            unique_id = int(result["unique_id"])
-            feature = unique_id_to_feature[unique_id]
-            output_json = collections.OrderedDict()
-            output_json["linex_index"] = unique_id
-            all_features = []
-            for (i, token) in enumerate(feature.tokens):
-                all_layers = []
-                for (j, layer_index) in enumerate(layer_indexes):
-                    layer_output = result["layer_output_%d" % j]
-                    layers = collections.OrderedDict()
-                    layers["index"] = layer_index
-                    layers["values"] = [
-                        round(float(x), 6) for x in layer_output[i:(i + 1)].flat
-                    ]
-                    all_layers.append(layers)
-                features = collections.OrderedDict()
-                features["token"] = token
-                features["layers"] = all_layers
-                all_features.append(features)
-            output_json["features"] = all_features
-            writer.write(json.dumps(output_json) + "\n")
+        yield article_tokens
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--input_file')
+    parser.add_argument('--vocab_file')
+    parser.add_argument('--bert_config_file')
+    parser.add_argument('--init_checkpoint')
+    parser.add_argument('--output_file')
+    parser.add_argument('--max_seq_length', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=8)
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    tf.logging.set_verbosity(tf.logging.INFO)
+    examples = read_examples(args.input_file)
+    with codecs.getwriter("utf-8")(tf.gfile.Open(args.output_file, "w")) as writer:
+        for embedding in bert_embedding_generator(examples, args.bert_config_file, args.vocab_file, args.init_checkpoint):
+            writer.write(embedding)
 
 
 if __name__ == "__main__":
-    flags.mark_flag_as_required("input_file")
-    flags.mark_flag_as_required("vocab_file")
-    flags.mark_flag_as_required("bert_config_file")
-    flags.mark_flag_as_required("init_checkpoint")
-    flags.mark_flag_as_required("output_file")
-    tf.app.run()
+    main()
