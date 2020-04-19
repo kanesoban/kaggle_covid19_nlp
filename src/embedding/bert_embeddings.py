@@ -32,6 +32,7 @@ import tensorflow as tf
 
 
 NUM_TPU_CORES = 8
+TOKENS = None
 
 
 class InputExample(object):
@@ -61,21 +62,53 @@ def input_fn_builder(features, seq_length):
     all_input_mask = []
     all_input_type_ids = []
 
+    '''
     for feature in features:
         all_unique_ids.append(feature.unique_id)
         all_input_ids.append(feature.input_ids)
         all_input_mask.append(feature.input_mask)
         all_input_type_ids.append(feature.input_type_ids)
+    '''
 
     def input_fn(params):
         """The actual input function."""
         batch_size = params["batch_size"]
 
-        num_examples = len(features)
+        #num_examples = len(features)
+
+        def input_generator():
+            for instance_features in features:
+                yield {
+                    'unique_ids': instance_features.unique_id,
+                    'input_ids': instance_features.input_ids,
+                    'input_mask': instance_features.input_mask,
+                    'input_type_ids': instance_features.input_type_ids
+                }
+
+        output_types = {
+            'unique_ids': tf.int32,
+            'input_ids': tf.int32,
+            'input_mask': tf.int32,
+            'input_type_ids': tf.int32
+        }
+
+        output_shapes = {
+            'unique_ids': [],
+            'input_ids': [seq_length],
+            'input_mask': [seq_length],
+            'input_type_ids': [seq_length]
+        }
+
+        d = tf.data.Dataset.from_generator(
+            input_generator,
+            output_types=output_types,
+            output_shapes=output_shapes
+        )
 
         # This is for demo purposes and does NOT scale to large data sets. We do
         # not use Dataset.from_generator() because that uses tf.py_func which is
         # not TPU compatible. The right way to load data is with TFRecordReader.
+        '''
         d = tf.data.Dataset.from_tensor_slices({
             "unique_ids":
                 tf.constant(all_unique_ids, shape=[num_examples], dtype=tf.int32),
@@ -94,6 +127,7 @@ def input_fn_builder(features, seq_length):
                     shape=[num_examples, seq_length],
                     dtype=tf.int32),
         })
+        '''
 
         d = d.batch(batch_size=batch_size, drop_remainder=False)
         return d
@@ -166,89 +200,83 @@ def model_fn_builder(bert_config, init_checkpoint, layer_indexes, use_tpu,
 def convert_examples_to_features(full_texts, ids, seq_length, tokenizer):
     """Loads a data file into a list of `InputBatch`s."""
 
-    features = []
-    for (ex_index, example) in tqdm(enumerate(full_texts), desc='Converting examples'):
-        unique_id = ids[ex_index]
-        tokens_a = tokenizer.tokenize(example)
+    def features_generator():
+        for (ex_index, example) in tqdm(enumerate(full_texts)):
+            unique_id = ids[ex_index]
+            tokens_a = tokenizer.tokenize(example)
 
-        tokens_b = None
+            tokens_b = None
 
-        # Account for [CLS] and [SEP] with "- 2"
-        if len(tokens_a) > seq_length - 2:
-            tokens_a = tokens_a[0:(seq_length - 2)]
+            # Account for [CLS] and [SEP] with "- 2"
+            if len(tokens_a) > seq_length - 2:
+                tokens_a = tokens_a[0:(seq_length - 2)]
 
-        # The convention in BERT is:
-        # (a) For sequence pairs:
-        #  tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
-        #  type_ids: 0     0  0    0    0     0       0 0     1  1  1  1   1 1
-        # (b) For single sequences:
-        #  tokens:   [CLS] the dog is hairy . [SEP]
-        #  type_ids: 0     0   0   0  0     0 0
-        #
-        # Where "type_ids" are used to indicate whether this is the first
-        # sequence or the second sequence. The embedding vectors for `type=0` and
-        # `type=1` were learned during pre-training and are added to the wordpiece
-        # embedding vector (and position vector). This is not *strictly* necessary
-        # since the [SEP] token unambiguously separates the sequences, but it makes
-        # it easier for the model to learn the concept of sequences.
-        #
-        # For classification tasks, the first vector (corresponding to [CLS]) is
-        # used as as the "sentence vector". Note that this only makes sense because
-        # the entire model is fine-tuned.
-        tokens = []
-        input_type_ids = []
-        tokens.append("[CLS]")
-        input_type_ids.append(0)
-        for token in tokens_a:
-            tokens.append(token)
+            # The convention in BERT is:
+            # (a) For sequence pairs:
+            #  tokens:   [CLS] is this jack ##son ##ville ? [SEP] no it is not . [SEP]
+            #  type_ids: 0     0  0    0    0     0       0 0     1  1  1  1   1 1
+            # (b) For single sequences:
+            #  tokens:   [CLS] the dog is hairy . [SEP]
+            #  type_ids: 0     0   0   0  0     0 0
+            #
+            # Where "type_ids" are used to indicate whether this is the first
+            # sequence or the second sequence. The embedding vectors for `type=0` and
+            # `type=1` were learned during pre-training and are added to the wordpiece
+            # embedding vector (and position vector). This is not *strictly* necessary
+            # since the [SEP] token unambiguously separates the sequences, but it makes
+            # it easier for the model to learn the concept of sequences.
+            #
+            # For classification tasks, the first vector (corresponding to [CLS]) is
+            # used as as the "sentence vector". Note that this only makes sense because
+            # the entire model is fine-tuned.
+            tokens = []
+            input_type_ids = []
+            tokens.append("[CLS]")
             input_type_ids.append(0)
-        tokens.append("[SEP]")
-        input_type_ids.append(0)
-
-        input_ids = tokenizer.convert_tokens_to_ids(tokens)
-
-        # The mask has 1 for real tokens and 0 for padding tokens. Only real
-        # tokens are attended to.
-        input_mask = [1] * len(input_ids)
-
-        # Zero-pad up to the sequence length.
-        while len(input_ids) < seq_length:
-            input_ids.append(0)
-            input_mask.append(0)
+            for token in tokens_a:
+                tokens.append(token)
+                input_type_ids.append(0)
+            tokens.append("[SEP]")
             input_type_ids.append(0)
 
-        assert len(input_ids) == seq_length
-        assert len(input_mask) == seq_length
-        assert len(input_type_ids) == seq_length
+            input_ids = tokenizer.convert_tokens_to_ids(tokens)
 
-        if ex_index < 5:
-            tf.logging.info("*** Example ***")
-            tf.logging.info("unique_id: %s" % unique_id)
-            tf.logging.info("tokens: %s" % " ".join(
-                [tokenization.printable_text(x) for x in tokens]))
-            tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-            tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
-            tf.logging.info(
-                "input_type_ids: %s" % " ".join([str(x) for x in input_type_ids]))
+            # The mask has 1 for real tokens and 0 for padding tokens. Only real
+            # tokens are attended to.
+            input_mask = [1] * len(input_ids)
 
-        features.append(
-            InputFeatures(
-                unique_id=unique_id,
-                tokens=tokens,
-                input_ids=input_ids,
-                input_mask=input_mask,
-                input_type_ids=input_type_ids))
+            # Zero-pad up to the sequence length.
+            while len(input_ids) < seq_length:
+                input_ids.append(0)
+                input_mask.append(0)
+                input_type_ids.append(0)
 
-        '''
-        features.append(
-            InputFeatures(
-                unique_id=example.unique_id,
-                tokens=tokens,
-                input_ids=input_ids,
-                input_mask=input_mask,
-                input_type_ids=input_type_ids))
-        '''
-    return features
+            assert len(input_ids) == seq_length
+            assert len(input_mask) == seq_length
+            assert len(input_type_ids) == seq_length
+
+            # Ugly hack to have the token at hand
+            global TOKENS
+            TOKENS = tokens
+
+            if ex_index < 5:
+                tf.logging.info("*** Example ***")
+                tf.logging.info("unique_id: %s" % unique_id)
+                tf.logging.info("tokens: %s" % " ".join(
+                    [tokenization.printable_text(x) for x in tokens]))
+                tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+                tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+                tf.logging.info(
+                    "input_type_ids: %s" % " ".join([str(x) for x in input_type_ids]))
+
+            yield InputFeatures(
+                    unique_id=unique_id,
+                    tokens=tokens,
+                    input_ids=input_ids,
+                    input_mask=input_mask,
+                    input_type_ids=input_type_ids)
+
+    return features_generator()
 
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
@@ -310,9 +338,11 @@ def bert_embedding_generator(articles, ids, bert_config_file, vocab_file, init_c
     features = convert_examples_to_features(
         full_texts=articles, ids=ids, seq_length=max_seq_length, tokenizer=tokenizer)
 
+    '''
     unique_id_to_feature = {}
     for feature in features:
         unique_id_to_feature[feature.unique_id] = feature
+    '''
 
     model_fn = model_fn_builder(
         bert_config=bert_config,
@@ -330,11 +360,12 @@ def bert_embedding_generator(articles, ids, bert_config_file, vocab_file, init_c
         predict_batch_size=batch_size)
 
     input_fn = input_fn_builder(features=features, seq_length=max_seq_length)
-    for result in tqdm(estimator.predict(input_fn, yield_single_examples=True), desc='Creating embeddings'):
+    for result in tqdm(estimator.predict(input_fn, yield_single_examples=True)):
         unique_id = int(result["unique_id"])
-        feature = unique_id_to_feature[unique_id]
+        #feature = unique_id_to_feature[unique_id]
+        features = None
         article_tokens = {}
-        for (i, token) in enumerate(feature.tokens):
+        for (i, token) in enumerate(TOKENS):
             # This is actually the output of the last encoder layer
             layer_output = result["layer_output_0"]
             embedding = np.array([round(float(x), 6) for x in layer_output[i:(i + 1)].flat])
@@ -356,16 +387,3 @@ def parse_args():
     parser.add_argument('--max_seq_length', type=int, default=128)
     parser.add_argument('--batch_size', type=int, default=8)
     return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    tf.logging.set_verbosity(tf.logging.INFO)
-    examples = read_examples(args.input_file)
-    with codecs.getwriter("utf-8")(tf.gfile.Open(args.output_file, "w")) as writer:
-        for embedding in bert_embedding_generator(examples, args.bert_config_file, args.vocab_file, args.init_checkpoint):
-            writer.write(embedding)
-
-
-if __name__ == "__main__":
-    main()
