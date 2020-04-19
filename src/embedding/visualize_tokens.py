@@ -1,20 +1,9 @@
 import argparse
 import os
-import re
-import glob
-import json
 import pandas as pd
 import numpy as np
 import pickle
-from tqdm import tqdm
-from sklearn import metrics
-from sklearn.utils import shuffle
-from gensim.models import Word2Vec
-from sklearn.cluster import KMeans
-from sklearn.decomposition import PCA
 import plotly.express as px
-
-from bert_embeddings import InputExample, bert_embedding_generator
 
 
 def parse_args():
@@ -24,6 +13,7 @@ def parse_args():
     parser.add_argument('--tokens', required=True)
     parser.add_argument('--keyword', required=True)
     parser.add_argument('--closest', type=int, required=True)
+    parser.add_argument('--output_dir', required=True)
     return parser.parse_args()
 
 
@@ -50,9 +40,14 @@ def main():
 
     indices = np.argsort(distances)[:args.closest]
 
+    closest_df = df.iloc[indices]
+
+    with open(os.path.join(args.output_dir, 'tokens_closest_{}.pkl'.format(args.keyword)), 'wb') as f:
+        pickle.dump(list(closest_df['Word']), f)
+
     # Visualize
     #df[df.b.str.contains('^f'), :]
-    fig = px.scatter(df.iloc[indices], x="Component 1", y="Component 2", text="Word", color="Distance", color_continuous_scale="agsunset",size="Distance")
+    fig = px.scatter(closest_df, x="Component 1", y="Component 2", text="Word", color="Distance", color_continuous_scale="agsunset",size="Distance")
     fig.update_traces(textposition='top center')
     fig.layout.xaxis.autorange = True
     fig.data[0].marker.line.width = 1
