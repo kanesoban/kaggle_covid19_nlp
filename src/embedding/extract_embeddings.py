@@ -6,6 +6,7 @@ import pickle
 from tqdm import tqdm
 import nltk
 from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
 
 nltk.download('stopwords')
 
@@ -28,6 +29,8 @@ def main():
 
     df_covid = pd.read_csv('covid.csv')
 
+    ps = PorterStemmer()
+
     token_embeddings = {}
     token_counts = {}
     for i, converted_article in tqdm(enumerate(
@@ -40,9 +43,15 @@ def main():
             if not re.match(r'[a-zA-Z]+[a-zA-Z0-9]*', token):
                 continue
 
+            # Filter out 1-2 long tokens
+            if len(token) <= 2:
+                continue
+
             # Filter out stopwords
             if token in set(stopwords.words('english')):
                 continue
+
+            token = ps.stem(token)
 
             embedding = np.sum(converted_article[token], axis=0)
             count = len(converted_article[token])

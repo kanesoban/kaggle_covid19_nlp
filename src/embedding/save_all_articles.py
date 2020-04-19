@@ -60,11 +60,9 @@ def main():
     df_covid.drop_duplicates(['paper_id', 'full_text'], inplace=True)
 
     # Remove punctuation
-
     df_covid['full_text'] = df_covid['full_text'].apply(lambda x: re.sub('[^a-zA-z0-9\s]', '', x))
 
     # Convert to lowercase
-
     df_covid['full_text'] = df_covid['full_text'].apply(lambda x: lower_case(x))
 
     df_covid.to_csv(args.output_path)
