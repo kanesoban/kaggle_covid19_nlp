@@ -34,7 +34,7 @@ def main():
     token_embeddings = {}
     token_counts = {}
     for i, converted_article in tqdm(enumerate(
-            bert_embedding_generator(df_covid['full_text'], list(range(len(df_covid))), args.bert_config,
+            bert_embedding_generator(df_covid['concat_text'], list(range(len(df_covid))), args.bert_config,
                                      args.vocab_file,
                                      args.bert_model_checkpoint)), desc='Converting article'):
         paper_id = df_covid['paper_id'].iloc[i]

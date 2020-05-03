@@ -38,7 +38,7 @@ def main():
     for i in tqdm(range(n_tokens), desc='Calculating token-article distances'):
         distances[i, :] = np.linalg.norm(tf_idf_articles.toarray() - tf_idf_tokens[i].toarray(), axis=1)
 
-    closest_article_ids = np.argmax(distances, axis=1)
+    closest_article_ids = np.argmin(distances, axis=1)
 
     closest_articles = df_articles.iloc[closest_article_ids]
 
