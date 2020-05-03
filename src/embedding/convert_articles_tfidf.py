@@ -25,6 +25,9 @@ def main():
     vectorizer = TfidfVectorizer(vocabulary=tokens, stop_words=stopwords.words('english'), lowercase=True)
     vectors = vectorizer.fit_transform(df_covid['full_text'])
 
+    with open(os.path.join(args.output_dir, 'tfidf_vectorizer.pkl'), 'wb') as f:
+        pickle.dump(vectorizer, f)
+
     with open(os.path.join(args.output_dir, 'tf_idf_articles.pkl'), 'wb') as f:
         pickle.dump(vectors, f)
 
