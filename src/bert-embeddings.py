@@ -24,7 +24,6 @@ import collections
 import json
 import re
 
-from tqdm import tqdm
 from bert import modeling
 from bert import tokenization
 import numpy as np
@@ -62,14 +61,6 @@ def input_fn_builder(features, seq_length):
     all_input_mask = []
     all_input_type_ids = []
 
-    '''
-    for feature in features:
-        all_unique_ids.append(feature.unique_id)
-        all_input_ids.append(feature.input_ids)
-        all_input_mask.append(feature.input_mask)
-        all_input_type_ids.append(feature.input_type_ids)
-    '''
-
     def input_fn(params):
         """The actual input function."""
         batch_size = params["batch_size"]
@@ -104,30 +95,6 @@ def input_fn_builder(features, seq_length):
             output_types=output_types,
             output_shapes=output_shapes
         )
-
-        # This is for demo purposes and does NOT scale to large data sets. We do
-        # not use Dataset.from_generator() because that uses tf.py_func which is
-        # not TPU compatible. The right way to load data is with TFRecordReader.
-        '''
-        d = tf.data.Dataset.from_tensor_slices({
-            "unique_ids":
-                tf.constant(all_unique_ids, shape=[num_examples], dtype=tf.int32),
-            "input_ids":
-                tf.constant(
-                    all_input_ids, shape=[num_examples, seq_length],
-                    dtype=tf.int32),
-            "input_mask":
-                tf.constant(
-                    all_input_mask,
-                    shape=[num_examples, seq_length],
-                    dtype=tf.int32),
-            "input_type_ids":
-                tf.constant(
-                    all_input_type_ids,
-                    shape=[num_examples, seq_length],
-                    dtype=tf.int32),
-        })
-        '''
 
         d = d.batch(batch_size=batch_size, drop_remainder=False)
         return d
@@ -201,7 +168,7 @@ def convert_examples_to_features(full_texts, ids, seq_length, tokenizer):
     """Loads a data file into a list of `InputBatch`s."""
 
     def features_generator():
-        for (ex_index, example) in tqdm(enumerate(full_texts)):
+        for (ex_index, example) in enumerate(full_texts):
             unique_id = ids[ex_index]
             tokens_a = tokenizer.tokenize(example)
 
@@ -338,12 +305,6 @@ def bert_embedding_generator(articles, ids, bert_config_file, vocab_file, init_c
     features = convert_examples_to_features(
         full_texts=articles, ids=ids, seq_length=max_seq_length, tokenizer=tokenizer)
 
-    '''
-    unique_id_to_feature = {}
-    for feature in features:
-        unique_id_to_feature[feature.unique_id] = feature
-    '''
-
     model_fn = model_fn_builder(
         bert_config=bert_config,
         init_checkpoint=init_checkpoint,
@@ -360,7 +321,7 @@ def bert_embedding_generator(articles, ids, bert_config_file, vocab_file, init_c
         predict_batch_size=batch_size)
 
     input_fn = input_fn_builder(features=features, seq_length=max_seq_length)
-    for result in tqdm(estimator.predict(input_fn, yield_single_examples=True)):
+    for result in estimator.predict(input_fn, yield_single_examples=True):
         unique_id = int(result["unique_id"])
         #feature = unique_id_to_feature[unique_id]
         features = None
